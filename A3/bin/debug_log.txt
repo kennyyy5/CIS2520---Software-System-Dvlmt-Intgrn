@@ -1,0 +1,69 @@
+fat12fsLoadDataBlock
+fat12fsDumpFat .
+fat12fsDumpRootdir .
+fat12fsFindFile
+fat12fsReadData .
+fat12fsSearchRootdir
+
+d not working - weird
+
+int fat12fsReadData(
+	struct fat12fs *fs,
+	char *buffer,
+	const char *filename,
+	int startpos,
+	int nBytesToCopy)
+{
+	int fileIndex = fat12fsFindFile(fs, filename);
+	if (fileIndex < 0)
+		return -1; /* file not found */
+
+	fat12fs_DIRENTRY *entry = &fs->fs_rootdirentry[fileIndex];
+
+	if (startpos >= (int)entry->de_filelen)
+		return 0; /* nothing to read */
+
+	int bytesToRead = nBytesToCopy;
+	if (startpos + bytesToRead > (int)entry->de_filelen)
+		bytesToRead = entry->de_filelen - startpos;
+
+	int totalRead = 0;
+	int currentBlock = entry->de_fileblock0;
+	int blockSkip = startpos / FS_BLKSIZE;
+	int offsetInBlock = startpos % FS_BLKSIZE;
+	char blockBuffer[FS_BLKSIZE];
+
+	/* Skip blocks until we reach the block containing startpos */
+	for (int i = 0; i < blockSkip; i++)
+	{
+		currentBlock = fat12fsGetFatEntry(fs, currentBlock);
+		if (currentBlock >= FAT12_EOF1 && currentBlock <= FAT12_EOFF)
+			return -1; /* premature EOF */
+	}
+
+	/* Safety counter to avoid infinite loops */
+	int safety = 0;
+	while (bytesToRead > 0 && safety < fs->fs_fatsize)
+	{
+		if (fat12fsLoadDataBlock(fs, blockBuffer, currentBlock) < 0)
+			return -1;
+
+		int copyBytes = FS_BLKSIZE - offsetInBlock;
+		if (copyBytes > bytesToRead)
+			copyBytes = bytesToRead;
+
+		memcpy(buffer + totalRead, blockBuffer + offsetInBlock, copyBytes);
+		totalRead += copyBytes;
+		bytesToRead -= copyBytes;
+		offsetInBlock = 0; /* Only the first block may have a nonzero offset */
+
+		if (bytesToRead > 0)
+		{
+			currentBlock = fat12fsGetFatEntry(fs, currentBlock);
+			if (currentBlock >= FAT12_EOF1 && currentBlock <= FAT12_EOFF)
+				break; /* reached end-of-file marker */
+		}
+		safety++;
+	}
+	return totalRead;
+}
